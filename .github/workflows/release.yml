@@ -1,0 +1,53 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  build-and-deploy:
+    name: Build and Deploy
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install backend dependencies
+        run: npm ci
+
+      - name: Build backend
+        run: npm run build
+
+      - name: Install frontend dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: Build frontend
+        working-directory: web
+        run: npm run build
+
+      - name: Create distribution package
+        run: |
+          mkdir -p dist-package
+          cp -r dist dist-package/
+          cp -r web/dist dist-package/web
+          cp package.json package-lock.json dist-package/
+          cp README.md dist-package/ 2>/dev/null || true
+          tar -czvf release-${{ github.event.release.tag_name }}.tar.gz -C dist-package .
+
+      - name: Upload release asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: ./release-${{ github.event.release.tag_name }}.tar.gz
+          asset_name: release-${{ github.event.release.tag_name }}.tar.gz
+          asset_content_type: application/gzip

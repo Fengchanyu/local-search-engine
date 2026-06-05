@@ -1,0 +1,63 @@
+{
+  "name": "local-search-engine",
+  "version": "1.0.0",
+  "description": "High-performance local file search engine with millisecond response time",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "search": "./dist/cli/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "build:web": "cd web && npm run build",
+    "build:all": "npm run build && npm run build:web",
+    "test": "jest",
+    "test:coverage": "jest --coverage",
+    "test:performance": "ts-node tests/performance/index.ts",
+    "test:web": "cd web && npm test",
+    "lint": "eslint src --ext .ts",
+    "start": "node dist/cli/index.js",
+    "start:server": "ts-node src/server/index.ts",
+    "start:web": "cd web && npm run dev",
+    "dev": "concurrently \"npm run start:server\" \"npm run start:web\"",
+    "launch": "node scripts/start.js --open-browser",
+    "launch:headless": "node scripts/start.js",
+    "launch:force-index": "node scripts/start.js --open-browser --force-index",
+    "install:all": "npm install && cd web && npm install"
+  },
+  "keywords": [
+    "search",
+    "file-search",
+    "local-search",
+    "index",
+    "everything"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "chokidar": "^3.6.0",
+    "commander": "^12.0.0",
+    "cors": "^2.8.6",
+    "express": "^4.22.2",
+    "iconv-lite": "^0.6.3",
+    "jschardet": "^3.0.0",
+    "sql.js": "^1.9.0"
+  },
+  "devDependencies": {
+    "@types/chokidar": "^2.1.7",
+    "@types/commander": "^2.12.5",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^4.17.25",
+    "@types/iconv-lite": "^0.0.1",
+    "@types/jest": "^29.5.12",
+    "@types/node": "^20.11.24",
+    "concurrently": "^8.2.2",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.1.2",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.3.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
