@@ -1,250 +1,16 @@
-#!/usr/bin/env node
-
-import { Command } from 'commander';
+import express, { Request, Response, NextFunction } from 'express';
+import cors from 'cors';
 import * as path from 'path';
 import * as fs from 'fs';
 import { LocalSearchEngine } from '../index';
-import { 
-  SearchOptions, 
-  ContentSearchOptions, 
-  FilterOptions,
-  SortOption,
-  SortOrder,
-  SearchResult,
-  ContentSearchResult
-} from '../types';
+import { SearchResult, SearchOptions, FilterOptions, SortOption, SortOrder } from '../types';
 
-const program = new Command();
-
-program
-  .name('search')
-  .description('High-performance local file search engine')
-  .version('1.0.0')
-  .enablePositionalOptions();
-
-program
-  .argument('[query]', 'Search query')
-  .option('-t, --type <extensions>', 'Filter by file type (comma-separated extensions)', parseExtensions)
-  .option('-s, --size <range>', 'Filter by file size (e.g., 1KB-10MB)', parseSizeRange)
-  .option('-d, --date <range>', 'Filter by date (today|yesterday|week|month|year|YYYY-MM-DD-YYYY-MM-DD)', parseDateRange)
-  .option('-p, --path <directory>', 'Search in specific directory')
-  .option('-r, --regex', 'Use regular expression search')
-  .option('-c, --content', 'Search file content')
-  .option('-f, --format <type>', 'Output format (text|json|csv)', 'text')
-  .option('-l, --limit <n>', 'Limit number of results', parseInt, 100)
-  .option('--case-sensitive', 'Case sensitive search')
-  .option('--exact', 'Exact match mode')
-  .option('--sort <field>', 'Sort by field (name|path|size|modifiedTime|createdTime)', 'name')
-  .option('--order <direction>', 'Sort order (asc|desc)', 'asc')
-  .option('--db <path>', 'Path to index database', getDefaultIndexPath())
-  .action(async (query: string, options: any) => {
-    try {
-      const engine = new LocalSearchEngine({
-        dbPath: options.db,
-        logLevel: 'error'
-      });
-
-      await engine.initialize();
-
-      if (!query) {
-        program.help();
-        return;
-      }
-
-      const searchOptions: Partial<SearchOptions> = {
-        caseSensitive: options.caseSensitive || false,
-        matchMode: options.exact ? 'exact' : 'fuzzy',
-        maxResults: parseInt(options.limit) || 100
-      };
-
-      const filterOptions: FilterOptions = {};
-      
-      if (options.type) {
-        filterOptions.extensions = options.type;
-      }
-      
-      if (options.size) {
-        filterOptions.sizeRange = options.size;
-      }
-      
-      if (options.date) {
-        filterOptions.dateRange = options.date;
-      }
-      
-      if (options.path) {
-        filterOptions.directory = options.path;
-      }
-
-      let results: SearchResult[] | ContentSearchResult[];
-
-      if (options.content) {
-        const contentOptions: Partial<ContentSearchOptions> = {
-          ...searchOptions,
-          fileExtensions: options.type || []
-        };
-        results = await engine.searchByContent(query, contentOptions);
-      } else if (options.regex) {
-        results = await engine.searchByRegex(query, searchOptions);
-      } else {
-        results = await engine.searchByName(query, searchOptions);
-      }
-
-      if (Object.keys(filterOptions).length > 0) {
-        results = engine.filterResults(results, filterOptions);
-      }
-
-      results = engine.sortResults(results, options.sort as SortOption, options.order as SortOrder);
-
-      outputResults(results, options.format, options.content);
-
-      engine.close();
-
-      process.exit(results.length > 0 ? 0 : 1);
-    } catch (error: any) {
-      console.error(`Error: ${error.message}`);
-      process.exit(2);
-    }
-  });
-
-program
-  .command('build')
-  .description('Build or update the search index')
-  .option('-p, --path <directories>', 'Directories to index (comma-separated)', parsePaths)
-  .option('--rebuild', 'Rebuild index from scratch')
-  .option('--db <path>', 'Path to index database', getDefaultIndexPath())
-  .action(async (options: any) => {
-    try {
-      const engine = new LocalSearchEngine({
-        dbPath: options.db,
-        logLevel: 'info',
-        indexConfig: {
-          includePaths: options.path || []
-        }
-      });
-
-      await engine.initialize();
-
-      console.log('Building index...');
-      console.log('Paths to index:', options.path || 'default paths');
-      
-      engine.on('indexing-progress', (data: any) => {
-        process.stdout.write(`\rIndexed ${data.indexedFiles} files...`);
-      });
-
-      if (options.rebuild) {
-        await engine.rebuildIndex();
-      } else {
-        await engine.buildIndex(options.path);
-      }
-
-      console.log('\nIndex built successfully.');
-      engine.close();
-    } catch (error: any) {
-      console.error(`Error: ${error.message}`);
-      process.exit(2);
-    }
-  });
-
-program
-  .command('status')
-  .description('Show index status')
-  .option('--db <path>', 'Path to index database', getDefaultIndexPath())
-  .action(async (options: any) => {
-    try {
-      const engine = new LocalSearchEngine({
-        dbPath: options.db,
-        logLevel: 'error'
-      });
-
-      await engine.initialize();
-      const status = engine.getIndexStatus();
-      
-      console.log('Index Status:');
-      console.log(`  Total files: ${status.totalFiles}`);
-      console.log(`  Last update: ${status.lastUpdateTime.toLocaleString()}`);
-      console.log(`  Indexing: ${status.isIndexing ? 'Yes' : 'No'}`);
-      
-      engine.close();
-    } catch (error: any) {
-      console.error(`Error: ${error.message}`);
-      process.exit(2);
-    }
-  });
-
-function parseExtensions(value: string): string[] {
-  return value.split(',').map(ext => {
-    if (!ext.startsWith('.')) {
-      return '.' + ext;
-    }
-    return ext.toLowerCase();
-  });
+interface SortOptions {
+  field: SortOption;
+  order: SortOrder;
 }
 
-function parsePaths(value: string): string[] {
-  return value.split(',').map(p => path.resolve(p.trim()));
-}
-
-function parseSizeRange(value: string): { min: number; max: number } {
-  const units: { [key: string]: number } = {
-    'B': 1,
-    'KB': 1024,
-    'MB': 1024 * 1024,
-    'GB': 1024 * 1024 * 1024
-  };
-
-  const parseSize = (sizeStr: string): number => {
-    const match = sizeStr.match(/^(\d+(?:\.\d+)?)\s*(B|KB|MB|GB)?$/i);
-    if (!match) throw new Error(`Invalid size format: ${sizeStr}`);
-    const num = parseFloat(match[1]);
-    const unit = (match[2] || 'B').toUpperCase();
-    return num * (units[unit] || 1);
-  };
-
-  const parts = value.split('-');
-  if (parts.length === 1) {
-    const size = parseSize(parts[0]);
-    return { min: 0, max: size };
-  }
-  
-  return { min: parseSize(parts[0]), max: parseSize(parts[1]) };
-}
-
-function parseDateRange(value: string): { start: Date; end: Date } {
-  const now = new Date();
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  
-  switch (value.toLowerCase()) {
-    case 'today':
-      return { start: today, end: now };
-    case 'yesterday':
-      const yesterday = new Date(today);
-      yesterday.setDate(yesterday.getDate() - 1);
-      return { start: yesterday, end: today };
-    case 'week':
-      const weekAgo = new Date(today);
-      weekAgo.setDate(weekAgo.getDate() - 7);
-      return { start: weekAgo, end: now };
-    case 'month':
-      const monthAgo = new Date(today);
-      monthAgo.setMonth(monthAgo.getMonth() - 1);
-      return { start: monthAgo, end: now };
-    case 'year':
-      const yearAgo = new Date(today);
-      yearAgo.setFullYear(yearAgo.getFullYear() - 1);
-      return { start: yearAgo, end: now };
-    default:
-      const match = value.match(/^(\d{4}-\d{2}-\d{2})-(\d{4}-\d{2}-\d{2})$/);
-      if (match) {
-        return {
-          start: new Date(match[1]),
-          end: new Date(match[2])
-        };
-      }
-      throw new Error(`Invalid date range format: ${value}`);
-  }
-}
-
-function getDefaultIndexPath(): string {
+function getDefaultDbPath(): string {
   const platform = process.platform;
   let dataDir: string;
 
@@ -263,32 +29,321 @@ function getDefaultIndexPath(): string {
   return path.join(dataDir, 'index.db');
 }
 
-function outputResults(results: SearchResult[] | ContentSearchResult[], format: string, isContent: boolean): void {
-  switch (format) {
-    case 'json':
-      console.log(JSON.stringify(results, null, 2));
-      break;
-    case 'csv':
-      console.log('Path,Name,Size,Modified,Extension');
-      for (const r of results) {
-        console.log(`"${r.path}","${r.name}",${r.size},"${r.modifiedTime.toISOString()}","${r.extension}"`);
+const app = express();
+const PORT = process.env.PORT || 3002;
+
+let engine: LocalSearchEngine | null = null;
+
+async function initializeEngine() {
+  const dbPath = process.env.DB_PATH || getDefaultDbPath();
+  console.log(`[DEBUG] Using database path: ${dbPath}`);
+  console.log(`[DEBUG] DB_PATH env: ${process.env.DB_PATH}`);
+  console.log(`[DEBUG] Database exists: ${fs.existsSync(dbPath)}`);
+  
+  engine = new LocalSearchEngine({
+    dbPath,
+    logLevel: 'error'
+  });
+  await engine.initialize();
+  
+  // Log file count
+  const status = engine.getIndexStatus();
+  console.log(`[DEBUG] Indexed files: ${status.indexedFiles}`);
+}
+
+app.use(cors());
+app.use(express.json());
+
+app.use((req: Request, res: Response, next: NextFunction) => {
+  console.log(`${new Date().toISOString()} ${req.method} ${req.path}`);
+  next();
+});
+
+app.get('/api/search', async (req: Request, res: Response) => {
+  try {
+    if (!engine) {
+      await initializeEngine();
+    }
+
+    const query = req.query.query as string || '';
+    const options: Partial<SearchOptions> = {
+      matchMode: (req.query.matchMode as SearchOptions['matchMode']) || 'fuzzy',
+      caseSensitive: req.query.caseSensitive === 'true',
+      maxResults: parseInt(req.query.maxResults as string) || 100
+    };
+
+    const results = await engine!.searchByName(query, options);
+    res.json({ success: true, data: results });
+  } catch (error) {
+    console.error('Search error:', error);
+    res.status(500).json({ success: false, error: (error as Error).message });
+  }
+});
+
+app.get('/api/search/content', async (req: Request, res: Response) => {
+  try {
+    if (!engine) {
+      await initializeEngine();
+    }
+
+    const query = req.query.query as string || '';
+    const options = {
+      maxResults: parseInt(req.query.maxResults as string) || 100
+    };
+
+    const results = await engine!.searchByContent(query, options);
+    res.json({ success: true, data: results });
+  } catch (error) {
+    console.error('Content search error:', error);
+    res.status(500).json({ success: false, error: (error as Error).message });
+  }
+});
+
+app.get('/api/search/regex', async (req: Request, res: Response) => {
+  try {
+    if (!engine) {
+      await initializeEngine();
+    }
+
+    const pattern = req.query.pattern as string || '';
+    const options = {
+      maxResults: parseInt(req.query.maxResults as string) || 100
+    };
+
+    const results = await engine!.searchByRegex(pattern, options);
+    res.json({ success: true, data: results });
+  } catch (error) {
+    console.error('Regex search error:', error);
+    res.status(500).json({ success: false, error: (error as Error).message });
+  }
+});
+
+app.post('/api/filter', async (req: Request, res: Response) => {
+  try {
+    if (!engine) {
+      await initializeEngine();
+    }
+
+    const { results, filters } = req.body as { results: SearchResult[]; filters: FilterOptions };
+    const filtered = engine!.filterResults(results, filters);
+    res.json({ success: true, data: filtered });
+  } catch (error) {
+    console.error('Filter error:', error);
+    res.status(500).json({ success: false, error: (error as Error).message });
+  }
+});
+
+app.post('/api/sort', async (req: Request, res: Response) => {
+  try {
+    if (!engine) {
+      await initializeEngine();
+    }
+
+    const { results, sort } = req.body as { results: SearchResult[]; sort: SortOptions };
+    const sorted = engine!.sortResults(results, sort.field, sort.order);
+    res.json({ success: true, data: sorted });
+  } catch (error) {
+    console.error('Sort error:', error);
+    res.status(500).json({ success: false, error: (error as Error).message });
+  }
+});
+
+app.post('/api/index/build', async (req: Request, res: Response) => {
+  try {
+    if (!engine) {
+      await initializeEngine();
+    }
+
+    const { paths } = req.body as { paths: string[] };
+    await engine!.buildIndex(paths);
+    res.json({ success: true, message: '索引建立成功' });
+  } catch (error) {
+    console.error('Build index error:', error);
+    res.status(500).json({ success: false, error: (error as Error).message });
+  }
+});
+
+app.post('/api/index/rebuild', async (req: Request, res: Response) => {
+  try {
+    if (!engine) {
+      await initializeEngine();
+    }
+
+    await engine!.rebuildIndex();
+    res.json({ success: true, message: '索引重建成功' });
+  } catch (error) {
+    console.error('Rebuild index error:', error);
+    res.status(500).json({ success: false, error: (error as Error).message });
+  }
+});
+
+app.get('/api/index/status', async (req: Request, res: Response) => {
+  try {
+    if (!engine) {
+      await initializeEngine();
+    }
+
+    const status = engine!.getIndexStatus();
+    res.json({ success: true, data: status });
+  } catch (error) {
+    console.error('Get status error:', error);
+    res.status(500).json({ success: false, error: (error as Error).message });
+  }
+});
+
+app.post('/api/index/pause', async (req: Request, res: Response) => {
+  try {
+    if (!engine) {
+      await initializeEngine();
+    }
+
+    engine!.pauseIndexing();
+    res.json({ success: true, message: '索引已暂停' });
+  } catch (error) {
+    console.error('Pause indexing error:', error);
+    res.status(500).json({ success: false, error: (error as Error).message });
+  }
+});
+
+app.post('/api/index/resume', async (req: Request, res: Response) => {
+  try {
+    if (!engine) {
+      await initializeEngine();
+    }
+
+    engine!.resumeIndexing();
+    res.json({ success: true, message: '索引已恢复' });
+  } catch (error) {
+    console.error('Resume indexing error:', error);
+    res.status(500).json({ success: false, error: (error as Error).message });
+  }
+});
+
+app.post('/api/index/stop', async (req: Request, res: Response) => {
+  try {
+    if (!engine) {
+      await initializeEngine();
+    }
+
+    engine!.stopIndexing();
+    res.json({ success: true, message: '索引已停止' });
+  } catch (error) {
+    console.error('Stop indexing error:', error);
+    res.status(500).json({ success: false, error: (error as Error).message });
+  }
+});
+
+app.post('/api/file/open', async (req: Request, res: Response) => {
+  try {
+    const { path } = req.body as { path: string };
+    const { exec } = require('child_process');
+    
+    const platform = process.platform;
+    let command: string;
+    
+    if (platform === 'win32') {
+      command = `start "" "${path}"`;
+    } else if (platform === 'darwin') {
+      command = `open "${path}"`;
+    } else {
+      command = `xdg-open "${path}"`;
+    }
+    
+    exec(command, (error: Error | null) => {
+      if (error) {
+        console.error('Open file error:', error);
+        res.status(500).json({ success: false, error: error.message });
+      } else {
+        res.json({ success: true, message: '文件已打开' });
       }
-      break;
-    default:
-      for (const r of results) {
-        console.log(r.path);
-        if (isContent && 'matches' in r) {
-          for (const match of r.matches) {
-            console.log(`  Line ${match.lineNumber}: ${match.lineContent.trim()}`);
-          }
-        }
+    });
+  } catch (error) {
+    console.error('Open file error:', error);
+    res.status(500).json({ success: false, error: (error as Error).message });
+  }
+});
+
+app.post('/api/file/copy-path', async (req: Request, res: Response) => {
+  try {
+    const { path } = req.body as { path: string };
+    
+    const platform = process.platform;
+    let command: string;
+    
+    if (platform === 'win32') {
+      command = `echo ${path} | clip`;
+    } else if (platform === 'darwin') {
+      command = `echo "${path}" | pbcopy`;
+    } else {
+      command = `echo "${path}" | xclip -selection clipboard`;
+    }
+    
+    const { exec } = require('child_process');
+    exec(command, (error: Error | null) => {
+      if (error) {
+        console.error('Copy path error:', error);
+        res.status(500).json({ success: false, error: error.message });
+      } else {
+        res.json({ success: true, message: '路径已复制' });
       }
-      console.log(`\n${results.length} result(s) found.`);
+    });
+  } catch (error) {
+    console.error('Copy path error:', error);
+    res.status(500).json({ success: false, error: (error as Error).message });
+  }
+});
+
+app.get('/api/file/stats', async (req: Request, res: Response) => {
+  try {
+    const filePath = req.query.path as string;
+    const fs = require('fs');
+    
+    const stats = fs.statSync(filePath);
+    
+    res.json({
+      success: true,
+      data: {
+        size: stats.size,
+        created: stats.birthtime,
+        modified: stats.mtime
+      }
+    });
+  } catch (error) {
+    console.error('Get file stats error:', error);
+    res.status(500).json({ success: false, error: (error as Error).message });
+  }
+});
+
+app.get('/api/health', (_req: Request, res: Response) => {
+  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+process.on('SIGINT', () => {
+  if (engine) {
+    engine.close();
+  }
+  process.exit(0);
+});
+
+process.on('SIGTERM', () => {
+  if (engine) {
+    engine.close();
+  }
+  process.exit(0);
+});
+
+async function startServer() {
+  try {
+    await initializeEngine();
+    
+    app.listen(PORT, () => {
+      console.log(`API Server running on http://localhost:${PORT}`);
+      console.log(`Health check: http://localhost:${PORT}/api/health`);
+    });
+  } catch (error) {
+    console.error('Failed to start server:', error);
+    process.exit(1);
   }
 }
 
-export { program };
-
-if (require.main === module) {
-  program.parse();
-}
+startServer();
